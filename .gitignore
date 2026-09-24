@@ -1,0 +1,45 @@
+# Operating system files
+.DS_Store
+._*
+Thumbs.db
+Desktop.ini
+
+# Local editor files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Local environment and secrets (keep shareable examples)
+.env
+.env.*
+!.env.example
+!.env.*.example
+!.env.sample
+!.env.*.sample
+
+# Logs and temporary files
+*.log
+*.tmp
+*.bak
+/tmp/
+/temp/
+
+# Python helpers
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# JavaScript helpers and generated output
+node_modules/
+/coverage/
+/dist/
+/build/

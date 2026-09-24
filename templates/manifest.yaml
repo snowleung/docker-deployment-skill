@@ -1,0 +1,33 @@
+# Release version, not schema version. No secret values belong in this file.
+version: v0.1.0
+
+application:
+  name: example-app
+
+server:
+  deploy_path: /srv/example-app
+
+docker:
+  compose_file: compose.yaml
+  # Must match the release version; never use latest.
+  image: example-app:v0.1.0
+
+environment:
+  # Existing server file: never overwrite or print its contents.
+  file: .env
+  required:
+    - DATABASE_URL
+    - APP_SECRET
+
+directories:
+  required:
+    - data
+
+verify:
+  services:
+    - app
+  directories:
+    - data
+  health:
+    url: http://127.0.0.1:8080/health
+    status: 200
