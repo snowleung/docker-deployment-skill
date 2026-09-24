@@ -1,33 +1,33 @@
-# Release version, not schema version. No secret values belong in this file.
-version: v0.1.0
+# Copy to the application repository as .deploy/manifest.yaml before release.
+# Schema version, NOT release version. Never put secret values in this file.
+version: 1
 
 application:
-  name: example-app
+  name: myapp
 
 server:
-  deploy_path: /srv/example-app
+  deploy_path: /opt/apps/myapp
 
 docker:
   compose_file: compose.yaml
-  # Must match the release version; never use latest.
-  image: example-app:v0.1.0
+  # Base image name only. Compose must use myapp:${APP_VERSION}.
+  image: myapp
 
 environment:
-  # Existing server file: never overwrite or print its contents.
-  file: .env
+  # Existing file outside repository; deployment never creates or overwrites it.
+  file: /opt/apps/myapp/shared/.env
   required:
     - DATABASE_URL
-    - APP_SECRET
 
 directories:
   required:
-    - data
+    - /data/myapp
 
 verify:
   services:
     - app
   directories:
-    - data
+    - /data/myapp
   health:
-    url: http://127.0.0.1:8080/health
+    url: http://127.0.0.1:3000/health
     status: 200
