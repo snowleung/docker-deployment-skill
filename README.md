@@ -13,6 +13,26 @@ main/master 已合并的 previous Tag → HEAD
 
 不新建其他分支，不自动 Publish，不自动发送客户通知。
 
+## 通过对话安装
+
+将下面这段话复制给支持 Skill 的 Agent：
+
+```text
+请安装这个 Skill：
+https://github.com/snowleung/docker-deployment-skill
+
+Skill 入口是仓库根目录的 SKILL.md，名称为 docker-deployment。
+请完整安装 SKILL.md、references/ 和 templates/，保持相对目录结构。
+
+如果你是 Codex，请使用 skill-installer，从该仓库 main 分支的根目录安装，
+安装名称指定为 docker-deployment。
+
+这里只安装技能，不执行真实 release 或 deploy。
+```
+
+不要只复制 `SKILL.md`，它引用了 `references/` 和 `templates/` 中的文件。
+其他 Agent 按其支持的技能安装方式保存完整目录即可。
+
 ## 依赖
 
 | 位置 | 依赖 |
