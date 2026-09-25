@@ -1,12 +1,14 @@
 # Docker Deployment Skill
 
-支持 `release` 和 `deploy`。Release 由 Skill 引导 Agent 直接使用 Git / GitHub CLI，现有 deploy 流程保持不变。
+支持 `release` 和 `deploy`，均由 Skill 引导 Agent 使用 Git、GitHub CLI、SSH 和项目已有命令完成，不内置发布或部署脚本。
 
 ```text
 main/master 已合并的 previous Tag → HEAD
 → 阅读代码变化 → 分析 migration / env / deployment
 → 询问缺失信息 → 按模板起草 Release Note
 → 开发者确认 → 确认 Tag/Commit → gh 创建 Draft Release
+→ 人工 Publish → SSH → 按现有模式更新代码 → 项目部署
+→ 针对 Release 查验 → 人工业务验收
 ```
 
 不新建其他分支，不自动 Publish，不自动发送客户通知。
@@ -16,10 +18,10 @@ main/master 已合并的 previous Tag → HEAD
 | 位置 | 依赖 |
 | --- | --- |
 | Release 本地 | Git、已认证的 GitHub CLI；由 Agent 阅读代码和生成说明 |
-| Deploy 本地 | Bash、Git、GitHub CLI、OpenSSH client、Python 3.9+（仅标准库） |
-| SSH 服务器 | Python 3.9+（标准库）、Git、Docker、本地 Docker daemon、Docker Compose V2、curl |
+| Deploy 本地 | Git、已认证的 GitHub CLI、OpenSSH client、可用的 SSH Key/agent/config |
+| SSH 服务器 | Git、项目已有的部署依赖；Docker Compose 项目需要 Docker/Compose，健康检查使用项目已有工具 |
 
-Release 不再需要专用 Bash/Python 脚本、YAML 解析器或自动文案生成器。现有 deploy 依赖不变。
+不再额外要求 Python、YAML 解析器或机器可读部署契约。服务器依赖和 SSH Key 由用户提前准备，Skill 不自动安装或配置。
 
 ## Release：准备当前 main/master 的发布说明
 
@@ -59,92 +61,91 @@ gh release create "$VERSION" \
 
 不再调用 `release.sh`。不自动生成 manifest，不自动 commit，不强推或移动 Tag。创建后返回 Draft 链接与 **AWAITING RELEASE REVIEW**，等待人工 Review / Publish。
 
-Release 的人工说明不强制包含部署契约。模板末尾保留现有 deploy 所需的 `Deployment Contract` 格式；若要使用现有自动部署脚本，需要另行补齐并确认该部分。缺少契约时 deploy 会按原逻辑停止。
+## Deploy：部署 Published Release
 
-## Deploy：部署 v1.0.0 到服务器
+例如向 Agent 提出：
 
-部署上下文来自 Published Release 的 Release Note，仓库里没有 manifest/contract 文件。
+> 部署 v1.3.0 到 production。
 
-```bash
-# 从目标应用 Git 仓库执行：
-/path/to/docker-deployment-skill/scripts/deploy.sh v1.0.0 root@192.168.1.100
-# 也可使用 ~/.ssh/config 中的 host：
-/path/to/docker-deployment-skill/scripts/deploy.sh v1.0.0 production-host
+Agent 按 [deploy 指引](references/deploy.md) 操作：
+
+1. 本地通过 gh 读取 Release、Tag 和完整 Note，确认已 Published、不是 Draft。
+2. 从 Note、项目文档确认部署目录、migration、env 变化、人工步骤与回滚；信息不足就询问。
+3. 用现有 SSH Key 免密连接；未配置好则停止，不保存或传递密码。
+4. 检查服务器 Git 状态、分支和 origin，有未提交代码就停止。
+5. fetch tags 后，按照项目已有 main/master 或 Tag 模式更新代码。
+6. 按 Release Note 和项目已有方式处理配置、migration 和人工步骤，执行部署并持续展示脱敏日志。
+7. 根据本次变更查验运行结果，输出 Deployment Result，单独列出未勾选的人工业务验收清单。
+
+例如 SSH config：
+
+```sshconfig
+Host production
+    HostName 192.168.1.100
+    User root
+    IdentityFile ~/.ssh/id_ed25519
 ```
 
-参数只有 `<version> <server>`。所有项目路径来自 **指定 Published Release 的 Release Note 中的 Deployment Contract**，不会读取当前 working tree 的任何配置。`docker.image: myapp` 是基础镜像名，Compose 应写 `image: myapp:${APP_VERSION}`。Release Note 缺失、Draft、缺 Deployment Contract、字段不完整或含歧义（例如「migration 可能需要」）时 `DEPLOYMENT BLOCKED`：Deploy 不猜测 migration 命令、env 文件、deploy path、持久目录或 services。
+Skill 使用 BatchMode 检查免密访问，保留严格主机密钥验证；未知主机或认证失败交给用户处理，不改用密码登录。
 
-脚本先从 GitHub API 确认 Published Release、Tag 和 SHA，解析 Release Note 的 Deployment Contract，再打印 Deployment Plan。之后连接 SSH，检查依赖、Git 仓库、现有环境文件/变量、持久目录、Docker endpoint 和磁盘空间。预检通过才 fetch tags、核对 SHA、detached checkout、build、up、执行 Release Note 声明的 migration，再自动验证。
+## 代码更新模式
 
-服务器布局由 Release Note 的 Deployment Contract 决定，例如：
+| 项目已有模式 | 更新方式 | 版本检查 |
+| --- | --- | --- |
+| main/master | checkout 对应分支，`git pull --ff-only origin <branch>` | 当前 HEAD 必须包含 Release Tag；报告实际 SHA 和额外提交 |
+| Tag | detached checkout Release Tag 对应提交 | 当前 HEAD 与已核实的 Tag commit 完全一致 |
 
-```text
-/opt/apps/myapp/             # Deployment.deploy_path
-├── repository/             # 提前准备的应用 Git 仓库
-└── shared/.env             # 提前准备的环境文件，位于 repository 外
-/data/myapp/                # 提前准备的持久目录
-```
+两种模式都先 `git fetch origin --tags` 并核对 Tag。禁止强制覆盖未提交代码或修改已有 Tag。分支模式可能包含比 Release 更新的提交；存在未说明的部署影响时先确认，不能把它描述为精确运行该 Tag。
 
-SSH 使用现有密钥、agent 或 SSH config；启用 BatchMode 和严格主机密钥检查，known_hosts 必须提前核实配置。不接收或存储 SSH password，不转发 agent。
+## 按本次 Release 部署和查验
 
-Compose 通过 `--env-file` 读取已有环境文件，以 release 参数设置 `APP_VERSION`，先 build，再 `up -d --no-build --pull never`，最后只执行 Release Note 声明的 migration（必须是 `docker compose exec/run ...`）。构建和启动日志实时输出，并遮盖 `.env` 值及 URL 密码；Dockerfile/构建脚本自身也必须禁止输出 secret。
+Compose 项目通常执行 `docker compose build` 和 `docker compose up -d`；有项目现有部署脚本时优先遵循。Migration 按项目和 Note 确定的方式与顺序执行，不套统一时机；需要迁移但方法不明确就询问。
 
-挂载目录必须已存在，bind mount 要使用 `create_host_path: false`；持久 named volume 只支持已有 external volume。不会自动创建目录、卷或 `.env`。服务器配置、dotenv 支持范围、Compose 示例和恢复边界见 [deploy 文档](references/deploy.md)。
+`.env` 只检查变量名称和配置状态，不显示值、不生成 Secret、不自动覆盖文件。变量已存在也不代表本次要求的值更新已完成，需要用户处理的配置必须确认完成后继续。
 
-## 验证与结果
+查验由 **Release Note + 项目配置 + 服务器状态** 决定：至少核对实际 Git 版本，Compose 项目查看 `docker compose ps`，并针对变化检查新增服务、环境变量名称、目录、health endpoint 和 migration 结果。不使用固定“五项通过”。
 
-自动检查 Git HEAD、服务 running 状态、必需环境变量名称、目录和 HTTP 健康状态码。服务和健康检查有有限重试，不执行自动修复。
-
-成功结果包含：
+例如本版新增 worker、REDIS_URL 且需要 migration，就重点确认 app/worker、REDIS_URL、迁移完成状态和项目 health endpoint。业务验收仍单独展示：
 
 ```text
+Deployment Result
+Release: v1.3.0
+Server: production
+Release Tag Commit: <tag-sha>
+Current Commit: <actual-head-sha>
+
+Code Update: PASS
 Deployment: PASS
-Git Commit        PASS
-Containers        PASS
-Environment       PASS
-Directories       PASS
-Health Check      PASS
-5 / 5 PASSED
-Status: AWAITING MANUAL VERIFICATION
-Manual verification is still required.
+Release Checks: PASS
+Deployment PASS
+
+Manual Business Verification
+□ 创建配方
+□ 导出配方
 ```
 
-必须再人工验收关键业务路径。可用内部辅助脚本只读重跑自动检查：
+只有所需技术操作和适用检查全部成功才能报告 Deployment PASS。Agent 不自动勾选业务验收，也不会因为 Note 提到客户更新而自动发送通知。
 
-```bash
-/path/to/docker-deployment-skill/scripts/verify-deployment.sh v1.0.0 production-host
-```
+## 失败与安全边界
 
-该脚本不执行服务器 checkout、build 或 up。
+关键步骤失败立即停止，展示脱敏错误、失败阶段和已发生的修改，依据 Release Note 展示回滚方式。没有明确依据和授权，不自动执行高风险回滚。
 
-## 测试
-
-```bash
-bash tests/test-deploy.sh
-# 如果安装了 ShellCheck：
-shellcheck scripts/*.sh tests/*.sh
-```
-
-Release 已改为 Skill 引导的 Git/gh 人工审核流程，不再保留原 release 脚本测试。现有 Deploy 测试仍使用 Python 标准库 unittest、临时 Git 仓库及 stub；测试不连接 production，也不创建真实 Release。
+不得输出 Secret Value、保存 SSH 密码、生成生产 Secret、覆盖服务器 `.env`、强制覆盖未提交代码、删除持久数据或 Docker Volume、执行 `docker system prune`，或执行 Note 未明确要求的 destructive database operation。
 
 ## 文件
 
-- `SKILL.md`：技能入口，只支持 release/deploy。
-- `scripts/deploy.sh`、`scripts/verify-deployment.sh`：现有 deploy 的 Bash 入口。
-- `scripts/contract.py`：Release Note 与 Deployment Contract 解析、歧义/secret 校验（标准库）。
-- `scripts/deployment.py`：manifest 解析、SSH 执行、远端部署和共享验证逻辑。
-- `scripts/requirements.txt`：本地 YAML 依赖。
-- `references/`：release/deploy 操作和失败处理说明。
-- `templates/`：标准化 Release Note 模板（人工作业章节 + Deployment Contract）。
-- `tests/`：离线 release/deploy 测试。
+```text
+SKILL.md
+README.md
+references/
+  release.md
+  deploy.md
+templates/
+  release-note.md
+LICENSE
+```
 
-## 范围与下一步
-
-V1 不实现 rollback、image registry 发布、Kubernetes、多服务器编排、服务器自动初始化或修复。不删除卷、旧镜像，不执行 prune，不修改防火墙，也不执行破坏性数据库操作。
-
-目前自动验证不检查运行镜像 digest、每个副本的健康状态或实际 volume mounts；Compose 配置层会检查版本标签和持久化约束。部署中途失败可能已修改 checkout 或启动部分容器，没有自动恢复。
-
-真实测试服务器的准备和验收步骤见 [验收清单](references/deploy.md#真实测试服务器验收)。
+旧的发布/部署脚本、契约解析器、相关脚本测试和过时实施计划已移除；不再要求 manifest、额外部署 schema 或 Release asset。部署时使用项目自身的命令，信息不足询问开发者。
 
 ## 许可证
 

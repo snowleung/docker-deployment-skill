@@ -1,138 +1,251 @@
-# Deploy V1
+# Deploy：根据 Published Release 执行项目部署
 
-## 接口与输入来源
-
-在目标应用 Git 仓库内执行：
-
-```bash
-/path/to/docker-deployment-skill/scripts/deploy.sh v1.0.0 root@192.168.1.100
-# 或使用 ~/.ssh/config 中已配置的 host：
-/path/to/docker-deployment-skill/scripts/deploy.sh v1.0.0 production-host
-```
-
-两个参数分别为 GitHub Release version 和 SSH target。服务器路径等项目配置全部来自 **Release Tag 对应提交中的 `.deploy/manifest.yaml`**。本地工作区可以处于其他分支或有改动，脚本不会读取其 manifest、覆盖其 Tag 或改变其 checkout。
-
-版本须与 Release Tag 相同，且能作为 Docker tag（1–128 个字母、数字、下划线、点、连字符，不能以点或连字符开头，禁止 `latest`）。SSH target 支持 `user@hostname`、IPv4 和 SSH config host；端口、密钥和跳板机通过 SSH config 配置，V1 不直接接受 IPv6 字面量或 SSH 选项。
-
-## 依赖和服务器准备
-
-本地需要 Bash、Git、已认证的 `gh`、OpenSSH client、Python 3.9+ 和 PyYAML 6.x。PyYAML 用于真实 YAML 解析，采用 SafeLoader 并拒绝重复键、未知字段和错误类型；不会使用 grep/sed 解析 YAML。
-
-远端需要 Python 3.9+（仅标准库，不需要 PyYAML）、Git、Docker、支持 `config --format json` 的 Docker Compose V2、curl。需要现有的本地 Unix socket Docker context；拒绝 `DOCKER_HOST` override 和指向另一台机器的 context。Docker 数据目录必须可读取磁盘空间，部署账户还需访问 Docker daemon。
-
-服务器必须提前准备：
-
-- `server.deploy_path` 和其中的 `repository` Git 仓库；该目录本身必须是仓库根目录、工作区干净，origin 对应本次 GitHub 项目。
-- `environment.file` 指向可读的现有文件，且其真实路径位于 repository 外。
-- manifest 所列的持久目录，真实路径位于 repository 外，部署账户具有读、写和进入权限。
-- 仓库和 Docker 数据所在文件系统各至少 1 GiB 可用空间。这是最低门槛，不保证足够构建所有项目。
-- 服务器已有访问 Git origin 的权限；脚本不复制 GitHub token 或 SSH 私钥。
-
-脚本不自动安装包、clone 仓库、创建目录、写入 `.env`、改变 Docker context 或修复权限。
-
-## SSH authentication
-
-使用现有密钥、SSH agent 或 `~/.ssh/config`。启用 `BatchMode=yes`、`StrictHostKeyChecking=yes` 和 10 秒连接超时；known_hosts 必须已由用户核实配置。脚本不提示输入 SSH password，不将密码写入命令行、manifest、仓库或日志；不启用 agent forwarding。
-
-经 SSH stdin 发送技能辅助代码和不含 secret value 的配置，在内存中执行，不上传临时文件或安装远端依赖。远端读取 `.env`，仅输出变量名称，例如 `DATABASE_URL: PRESENT`。
-
-## 执行流程
+用户指定版本和服务器，例如“部署 v1.3.0 到 production”。由 Agent 使用 `gh`、SSH 和项目已有命令完成，不使用技能自带的部署脚本，不要求 manifest 或机器可读 Deployment Contract。
 
 ```text
-Published Release → Tag → exact Commit → commit-owned manifest
-→ Deployment Plan → SSH precheck → checkout exact Commit
-→ Server Build → Docker Compose up → Automatic Verification
-→ AWAITING MANUAL VERIFICATION
+Published Release + 完整 Release Note
+→ SSH Key 连接 → 查看服务器项目状态
+→ 按已有 main/master 或 Tag 模式更新代码
+→ 处理 migration / .env / 人工步骤
+→ 执行项目部署 → 针对本次 Release 查验
+→ Deployment Result + 独立的人工业务验收清单
 ```
 
-1. 检查本地依赖、GitHub authentication、当前 Git 仓库。根据 origin 明确指定 GitHub 仓库，忽略 `GH_REPO` 和 gh 默认仓库；V1 支持 github.com 的标准 HTTPS/SSH origin，不支持凭据嵌入 URL 或 GitHub Enterprise。
-2. 读取 Release 并拒绝 Draft/未 Publish 状态。通过 GitHub Git refs API 确认 Tag 存在，递归解析 annotated Tag，得到完整 SHA；不使用 Release 的目标分支字段代替 SHA。
-3. 在本地临时 Git 仓库 fetch 指定 Tag，核对 GitHub SHA，使用 `git show <sha>:.deploy/manifest.yaml` 读取、严格校验 manifest。完成后删除本地临时仓库。
-4. 连接 SSH 前输出 Deployment Plan：Application、Release、Tag/Commit、Server、Deploy Path、Compose、版本化 Image、必需环境变量名称、目录和健康检查 URL。此时不修改服务器。
-5. SSH 连接成功后检查远端 Python/Git/Docker/Compose/curl、Docker daemon/endpoint、目录、Git origin、干净工作区、环境文件及变量、持久目录和磁盘空间。失败输出 `DEPLOYMENT BLOCKED`，不进入 fetch/checkout/build。
-6. 在 `<deploy_path>/repository` 执行 `git fetch origin --tags`，解析服务器上的 `refs/tags/<tag>^{commit}`。必须等于预期 SHA，否则停止。然后 `git checkout --detach <sha>`，再次确认 HEAD。checkout 禁用 Git hooks，不自动处理冲突或脏工作区。
-7. 校验指定 Compose 文件位于仓库内，读取 `docker compose config --format json` 的结果但不打印其中的环境值。确认要求的服务存在、应用镜像使用 `<docker.image>:<release>` 并配置 build，所有服务镜像都有显式版本且不使用 `latest`。检查挂载配置，阻止自动创建持久目录和卷。
-8. 设置 `APP_VERSION=<release>`，以 manifest 的应用名称作为 Compose project name，指定 `--env-file <environment.file>` 和 `-f <compose_file>`，执行 build，成功后执行 `up -d --no-build --pull never`，再输出 `docker compose ps`。后两个 flag 保证启动阶段不另行构建或拉取镜像；第三方服务镜像须提前在服务器上准备。Docker build 自身可能需要下载基础镜像或构建依赖。
-9. 执行下述自动验证。任意失败输出 `DEPLOYMENT FAILED` 并停止；不自动重启、清理或回滚。SSH 中断时远端结果可能未知，应人工检查后再决定后续操作。
-10. 五项通过后输出 `5 / 5 PASSED` 和 `AWAITING MANUAL VERIFICATION`，请求用户验收关键业务操作。不能将技术通过报告为业务验收完成。
+## 1. 在本地读取 Published Release
 
-## Manifest schema 1
-
-从 [模板](../templates/manifest.yaml) 复制到应用项目的 `.deploy/manifest.yaml`，在创建 Release 前提交。所有字段必需；列表不可有重复项。`verify.services` 至少一项；环境变量和目录列表允许为空，以支持无持久化存储的应用。
-
-| 字段 | 含义和约束 |
-| --- | --- |
-| `version` | 整数 `1`，schema 版本，不是 release version |
-| `application.name` | Compose project name，小写字母/数字开头，允许下划线、连字符 |
-| `server.deploy_path` | 服务器部署目录的绝对路径 |
-| `docker.compose_file` | repository 内相对路径，不允许 `..` |
-| `docker.image` | 镜像基础名称，不含 tag、digest 或 registry port |
-| `environment.file` | repository 外现有环境文件的绝对路径 |
-| `environment.required` | 必需环境变量名称列表，值需存在且非空 |
-| `directories.required` | 部署前须存在且可访问的持久目录绝对路径列表 |
-| `verify.services` | 须处于 running 状态的 Compose 服务名称列表 |
-| `verify.directories` | 自动验证需检查的目录绝对路径列表，预检也检查 |
-| `verify.health.url` | 从服务器访问的 HTTP(S) URL，不含 userinfo、query 或 fragment |
-| `verify.health.status` | 预期 HTTP 状态码，整数 |
-
-manifest 不存储 secret value。路径目前限可打印 ASCII，不允许路径遍历。不要将远端密码或 token 填入健康检查 URL。
-
-## Environment 与 Compose 合约
-
-`.env` 只支持单行字面量 `NAME=value`、`NAME='value'`、`NAME="value"`，可带 `export`、空行和注释。支持行尾注释；不支持多行、双引号转义、变量插值或重复键。包含 `$`、反引号或反斜线的字面值请用单引号。值不会被 shell source/eval。
-
-`PATH`、`HOME`、`PYTHONPATH`、`LD_PRELOAD`、`LD_LIBRARY_PATH`、`BASH_ENV`、`ENV` 以及 `DOCKER_*`/`COMPOSE_*` 是保留的运行配置，不得放进应用 `.env`。脚本通过 `--env-file` 给 Compose 提供值，并清除同名的继承环境值以防覆盖；`APP_VERSION` 始终由 release 参数决定。
-
-`--env-file` 负责 Compose 插值，不会自动把所有变量注入容器。应用的 Compose 文件应明确引用所需变量，例如：
-
-```yaml
-services:
-  app:
-    image: myapp:${APP_VERSION}
-    build: .
-    environment:
-      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
-    ports:
-      - "127.0.0.1:3000:3000"
-    volumes:
-      - type: bind
-        source: /data/myapp
-        target: /app/data
-        bind:
-          create_host_path: false
-```
-
-bind source 必须已存在；须使用长格式并明确 `create_host_path: false`，拒绝默认可能创建目录的短格式。持久化 named volume 只支持提前准备的 `external: true` 卷，拒绝匿名持久卷；tmpfs 可用。不会删除或创建卷，也不会更改挂载配置。相关约定参见 [Docker bind mount 文档](https://docs.docker.com/reference/compose-file/services/#volumes) 和 [external volume 文档](https://docs.docker.com/reference/compose-file/volumes/#external)。
-
-Docker 命令的 stdout/stderr 会实时合并输出，遮盖服务器 `.env`、继承环境、Compose 展开的 environment/build args 中的值、URL 密码及常见编码形式；配置展开结果和 Git 原始错误不直接输出。**发布的 Dockerfile/构建脚本必须禁止打印 secret**：无法可靠识别任意拆分、加密或其他变换后的秘密，日志过滤不替代这一要求。
-
-## Automatic Verification
-
-五项必需检查：
-
-1. Git Commit：服务器 HEAD 与预期 SHA 一致。
-2. Containers：manifest 要求的服务均出现在 Compose 的 running 服务列表。
-3. Environment：现有环境文件可读，必需变量名称存在且值非空；只输出名称。
-4. Directories：必需目录及 verify 目录存在、可访问。
-5. Health Check：服务器发起 HTTP 请求，状态码等于 manifest 预期；不输出响应正文。
-
-服务和健康检查最多尝试 3 次，间隔 1 秒；每次 HTTP 连接超时 3 秒，总请求超时 5 秒。不自动修复服务。当前不验证每个副本的健康状态、运行镜像 digest 或容器实际挂载状态；构建前的镜像标签/挂载配置检查也不等于这些运行时检查。
-
-可独立重跑只读验证：
+确认 GitHub 仓库与用户目标一致，显式指定 `--repo`；不要依赖可能指向另一仓库的 `GH_REPO` 或 gh 默认仓库。检查本地 `gh`、Git、SSH 及 GitHub authentication。
 
 ```bash
-/path/to/docker-deployment-skill/scripts/verify-deployment.sh v1.0.0 production-host
+gh auth status
+gh release view "$VERSION" --repo "$REPO" \
+  --json tagName,isDraft,publishedAt,body,url
 ```
 
-该辅助命令重新解析 Published Release 和 manifest，预检并验证，不执行远端 fetch、checkout、build 或 up。
+读取完整 `body`，确认 Release 存在、`isDraft` 为 false 且已 Published。查询失败或尚未 Publish 时停止，不自动发布或改用其他版本。
 
-## 真实测试服务器验收
+记录 Release、Tag、链接，并通过 GitHub/Git 解引用 Tag 到 commit（annotated Tag 要解引用到 commit，而非使用 Tag 对象 SHA）。不要将 Release 的 `target_commitish` 分支名当作固定 SHA。后续核对服务器上的 Tag 与该提交一致。
 
-1. 选择可丢弃的测试服务器；人工准备依赖、SSH/known_hosts、仓库、外置 `.env`、目录、必要的第三方镜像和 external volumes。
-2. 在测试应用仓库提交 schema 1 manifest、符合上述合约的 Compose 和 Dockerfile。健康端点应从服务器可访问。
-3. 从应用 main 创建一个新版本 Draft，人工检查 Tag/SHA 和配置后手动 Publish。现有技能仓库 `v0.1.0` 不含应用 `.deploy/manifest.yaml`，不能直接用于本次部署验收。
-4. 在应用仓库运行 `deploy.sh <version> <test-host>`，核对 plan、SHA、实时日志和五项结果；前后核对服务器 `.env` 未改变。
-5. 人工检查关键业务路径、数据持久性和应用日志，记录结论。自动输出必须保持等待人工验证。
-6. 在测试环境分别模拟缺失环境变量、目录、构建失败和健康失败，确认停止阶段且没有自动修复或清理。
+重点阅读 Release Note 中：
 
-V1 不实现 rollback、registry 发布/推送、Kubernetes、多服务器编排、自动服务器初始化或失败恢复。部署失败可能已切换代码或启动部分容器，必须先人工确认状态。
+- 部署内容及新增/变化的服务。
+- 是否需要数据库 migration，执行方式、顺序和限制。
+- 是否新增或更新服务器 `.env`，涉及哪些变量名称。
+- 人工部署步骤及回滚方式。
+- 人工业务验收清单。
+- 是否包含需要通知客户的更新。
+
+Release Note 是本次变更的说明；项目部署文档、配置和服务器实际状态共同决定如何执行。没有固定标题或机器格式不应成为阻碍，但内容缺失、互相冲突或含糊时，应询问开发者，不能把“没提到”当成“不需要”。
+
+部署目录、代码仓库位置、分支/Tag 模式或项目命令不明确时先查已有文档，仍无法确定就询问。不要硬编码 `<deploy_path>/repository` 或替用户选择新的部署模式。开始修改前简要展示目标服务器、目录、模式、版本和操作顺序。
+
+## 2. SSH Key 连接服务器
+
+使用用户已有 SSH Key、SSH agent 或 `~/.ssh/config`，例如：
+
+```sshconfig
+Host production
+    HostName 192.168.1.100
+    User root
+    IdentityFile ~/.ssh/id_ed25519
+```
+
+以免密方式连接，并保留主机身份验证：
+
+```bash
+ssh -o BatchMode=yes -o StrictHostKeyChecking=yes production
+```
+
+若 Key 认证失败或主机身份尚未核实，停止并提示用户先完成 SSH Key / known_hosts 配置。不要回退到服务器密码，不保存或传递密码，不自动修改 SSH 配置或关闭主机密钥校验。
+
+远端还必须已有项目所需的 Git、Docker/Compose 或其他部署依赖及访问 origin 的权限。缺失时报告具体依赖，不临时替服务器安装或修复。
+
+## 3. 检查并更新服务器代码
+
+进入已确认的**实际项目目录**，记录当前 SHA、分支和 origin，查看：
+
+```bash
+git status
+git branch --show-current
+git remote -v
+git rev-parse HEAD
+```
+
+origin 必须对应目标项目；若 URL 含凭据，显示前遮盖凭据。检查全部已跟踪修改、暂存修改和未跟踪代码。存在未提交代码变更时停止，让用户处理；不自动 stash、commit、reset、clean，也不强制 checkout。项目原有被忽略的 `.env` 不应因此被覆盖或删除。
+
+工作区适合更新后：
+
+```bash
+git fetch origin --tags
+```
+
+确认 Release Tag 存在，解析并核对它的 commit 与本地从 GitHub 获取的 Release Tag commit 一致。fetch 或 Tag 核对失败即停止，不覆盖发生冲突的 Tag。
+
+### main/master 部署模式
+
+只采用项目已经约定的分支。main 模式：
+
+```bash
+git checkout main
+git pull --ff-only origin main
+```
+
+master 模式：
+
+```bash
+git checkout master
+git pull --ff-only origin master
+```
+
+不能 fast-forward、分支不存在或 checkout 失败时停止，不自动创建分支、合并、rebase 或强制同步。
+
+更新后：
+
+```bash
+git log -1 --oneline
+git rev-parse HEAD
+git merge-base --is-ancestor "refs/tags/$TAG^{commit}" HEAD
+```
+
+祖先检查必须成功，证明当前代码包含该 Release。该模式允许运行比 Release Tag 更新的代码：必须展示 Release Tag SHA 和实际 HEAD SHA，说明是否包含额外提交，不得报告“精确运行该 Tag”。如果额外提交带来本次 Note 未覆盖的 migration/env/部署变化，先阅读相关变更并向开发者确认后再继续。
+
+### Tag 部署模式
+
+如果项目已有 Tag 部署约定：
+
+```bash
+git checkout --detach "refs/tags/$TAG^{commit}"
+git log -1 --oneline
+git rev-parse HEAD
+```
+
+当前 HEAD 必须等于已核实的 Release Tag commit。不要使用强制 Git 操作，不改写服务器本地提交、Tag 或未提交文件。
+
+## 4. 根据 Release Note 准备本次操作
+
+列出相关操作和依赖顺序，结合当前项目配置核实。需要先配置环境、停写或备份才能迁移时，必须先满足这些前提。不要统一假定 migration 必须在启动前或启动后；按项目已有方式和本版 Note 执行。
+
+### Database Migration
+
+- 明确需要：使用项目已有、且符合本版说明的 migration 命令；先核实目标数据库和前置条件。
+- 明确不需要：不执行。
+- 需要但命令、目标或执行顺序不明确：询问开发者，不猜测命令、不选择“看起来通用”的 ORM 命令。
+
+记录执行结果和项目已有 migration 状态查询结果；命令失败时立即停止。SSH 中断或执行结果未知时先查状态，不盲目重复可能非幂等的操作。
+
+### 服务器 `.env`
+
+如果 Note 要求新增或更新配置，检查实际使用的环境文件和所需变量名称，**不要输出值**。使用只返回名称及存在状态的检查，例如：
+
+```text
+REDIS_URL: PRESENT
+UPLOAD_PATH: MISSING
+```
+
+不要 `cat .env`、输出完整 `env`/`printenv`，也不要打印展开后带秘密的 Compose 配置；不得把 `.env` 当作 shell 脚本执行。
+
+变量名称已存在不代表要求的更新已完成。对于值需要变更的项目，请用户在服务器处理，并确认变更完成；必要时使用不泄露值的项目配置检查。缺失或更新未确认就停止。不自动生成生产 Secret，不自动覆盖 `.env`，不在聊天、命令行或日志中传递 Secret Value。
+
+### 人工部署步骤
+
+按 Release Note 的顺序展示。目标、命令和影响明确，且属于用户已授权部署范围的安全操作可由 Agent 执行；需要人工介入或风险/信息不明确的操作交给用户完成。在依赖这些步骤的后续操作前，等待完成确认。
+
+手工部署说明不是执行任意文本命令的授权；先核对命令与仓库、服务器和部署目标一致。尤其不得执行 Release Note 未明确要求的 destructive database operation。对高风险数据操作，不因“Note 中出现过”就跳过风险和授权判断。
+
+## 5. 执行项目已有部署方式
+
+优先阅读项目部署文档和部署脚本，沿用现有 Compose 文件、project name、环境文件、镜像命名和命令。不要引入新的目录结构或构建方式。
+
+Docker Compose 项目没有其他明确步骤时，通常依次执行：
+
+```bash
+docker compose build
+docker compose up -d
+```
+
+每个关键命令成功后才进入下一步；不要使用无条件继续的命令串。项目需要 `-f`、`--env-file` 或版本变量时，依据实际配置传入，不凭空设置。本地构建或 migration 的顺序依从上一步确认的计划。
+
+持续展示远端进度和经过保密处理的输出：Git 更新、Docker build、Compose、migration 和错误信息。不将全部输出重定向到 `/dev/null`，也不只返回最终一句成功。涉及可能泄密的输出，先使用安全输出方式或遮盖已知秘密；无法安全展示时保留不含值的阶段/错误摘要，不冒险原样输出。不要启用 `set -x`。
+
+## 6. 针对本次 Release 查验
+
+依据 **Release Note + 当前项目配置 + 当前服务器运行状态** 制定检查项，不使用与本版无关的固定“五项通过”计数。
+
+最基本地核对代码版本；Docker Compose 项目同时查看容器：
+
+```bash
+git log -1 --oneline
+git rev-parse HEAD
+docker compose ps
+```
+
+按实际适用情况继续检查：
+
+- main/master 模式的 HEAD 包含 Release Tag，或 Tag 模式的 HEAD 精确匹配。
+- 相关容器/服务是否启动，有 health status 时是否健康。
+- Note 新增的服务是否存在且运行，不能只看旧服务。
+- 本次要求的环境变量名称已配置；要求更新的配置已确认处理。
+- Note 要求的目录存在且项目有访问权限，不创建替代目录掩盖缺失。
+- 项目已有 health endpoint 是否返回预期状态；不猜测 URL 或只根据任意 HTTP 响应判成功。
+- 本次需要的 migration 是否成功完成，必要时查询项目的迁移状态。
+
+例如本版新增 worker 和 REDIS_URL 且需要 migration，则重点检查 app/worker、REDIS_URL 的名称状态、migration 完成状态及实际 health endpoint。不需要 migration 时标为“不需要”，不能声称已执行成功。
+
+项目确实没有的检查项可注明“不适用”；缺失关键证据则标为未完成/阻塞，不能记为 PASS。健康状态需要等待时采用有限等待或重试，持续失败就停止，不无限等待或自动修复。
+
+## 7. 输出部署结果和人工业务验收
+
+仅当代码更新、所需部署操作和适用的 Release 检查全部成功，才输出 `Deployment PASS`。同时记录 Release Tag 与实际 HEAD，区分分支部署和 Tag 部署。
+
+示例（按实际动作调整，不照抄成功项）：
+
+```text
+Deployment Result
+
+Release: v1.3.0
+Server: production
+Mode: main
+Release Tag Commit: <tag-sha>
+Current Commit: <actual-head-sha>
+
+Code Update
+✓ Git pull --ff-only completed
+✓ Current HEAD includes Release Tag
+
+Deployment
+✓ Docker build
+✓ Docker compose up
+✓ Database migration
+
+Release Checks
+✓ Required environment configured
+✓ app running
+✓ worker running
+✓ Health check passed
+
+Deployment PASS
+```
+
+随后**单独**展示 Release Note 中的业务验收项，保持未勾选：
+
+```text
+Manual Business Verification
+
+□ 创建配方
+□ 导出配方
+
+等待用户进行业务验收并反馈结果。
+```
+
+技术部署成功不代表业务已验收，Agent 不自动把这些项标为通过。若本版有需要通知客户的更新，另行提醒其内容与待处理状态；没有明确发送指令，不向客户发送。
+
+## 8. 失败处理
+
+任何关键步骤失败，停止后续部署，输出 `DEPLOYMENT FAILED`；依赖、认证或配置阻止继续时输出 `DEPLOYMENT BLOCKED`。
+
+报告失败步骤、脱敏错误输出、已完成操作及可能已改变的状态（例如代码已更新、容器部分启动或迁移结果未知）。根据 Release Note 展示回滚方法和限制；没有可靠回滚说明时询问开发者，不杜撰。没有明确依据和授权时，不自动执行高风险回滚，更不自动删库、清理数据或删除卷。
+
+## 安全边界
+
+不得输出 Secret Value、保存 SSH 密码、自动生成生产 Secret、覆盖服务器 `.env`、强制覆盖未提交代码、删除持久数据或 Docker Volume、执行 `docker system prune`，或执行 Release Note 未明确要求的 destructive database operation。
+
+代码目录、部署模式、命令和回滚计划需要来自可核实的项目事实或开发者确认；缺失时停下来询问。此 Skill 不负责配置 SSH Key、服务器初始化、自动修复或多服务器编排。

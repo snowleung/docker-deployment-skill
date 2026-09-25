@@ -121,8 +121,8 @@ gh release create "$VERSION" \
 
 成功后用 `gh release view "$VERSION" --repo "$REPO" --json tagName,isDraft,url` 检查状态，向开发者返回 Draft 链接、Tag、Commit 和 **AWAITING RELEASE REVIEW**。不自动 Publish。
 
-## 与现有 Deploy 的边界
+## 与 Deploy 的衔接
 
-普通 Release Note 不强制包含机器可读 Deployment Contract，也不要求生成 manifest。
+Release Note 不要求 manifest 或机器可读 Deployment Contract。后续 Agent 按 [deploy 指引](deploy.md)，结合 Published Release Note、项目已有配置和服务器实际状态执行部署；信息不足时询问开发者，不猜测操作。
 
-现有 deploy 脚本仍需 Release Note 中的 `## Deployment Contract`。若开发者还要求准备该自动部署流程，另读 [references/deploy.md](deploy.md)，按 [Release Note 模板中保留的 Deployment Contract](../templates/release-note.md#deployment-contract) 补充已确认的字段，并连同完整正文一起审核。不要为满足解析器而猜测生产信息；缺失契约的 Release 不能直接交给当前 deploy 脚本执行。
+Release 的人工验收清单仅包含业务，部署技术检查在 Deploy 阶段按本次变更决定。Release Note 中记录的人工回滚方法并不授权自动执行高风险回滚。

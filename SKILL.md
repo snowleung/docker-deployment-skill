@@ -22,27 +22,34 @@ description: Use when the user asks to prepare a GitHub release from main or mas
 
 Release Note 必须回答：部署什么、是否需要 migration、是否修改服务器 `.env`、人工部署和回滚如何进行、哪些业务需要人工验收、是否有需要通知客户的更新。业务验收不包含技术测试；客户通知仅整理内容，不自动发送。
 
-不自动生成或提交 manifest，不强制为普通 Release Note 收集 Deployment Contract。只有开发者还要求准备现有自动部署流程时，才按 deploy 文档补齐契约并一并确认。
+不自动生成或提交 manifest，不要求额外的机器可读契约。Release Note 为后续部署提供本次变更、操作和业务验收说明。
 
 ## Deploy
 
-读取 [references/deploy.md](references/deploy.md)，运行 `scripts/deploy.sh <version> <server>`，例如 `v1.0.0 production-host`。从 Published Release 的 Release Note 读取 `## Deployment Contract`，生成 Deployment Plan，预检后 SSH 执行。不补充任何缺失的部署事实。
+先读取 [references/deploy.md](references/deploy.md)。用户指定版本和服务器，例如“部署 v1.3.0 到 production”。由 Agent 使用 gh、SSH 和项目已有命令执行，不调用技能自带部署脚本：
 
-## 部署约束（沿用现有流程）
+1. 本地用 gh 获取指定 Published Release、Tag 和完整 Release Note；不存在、未发布或 Draft 就停止。
+2. 阅读部署内容、migration、服务器 `.env` 变化、人工步骤、回滚、业务验收和客户更新需求。结合项目文档确认代码目录与部署模式，信息不足先询问。
+3. 用已有 SSH Key/agent/config 免密连接；未配置好就停止，不保存或传递服务器密码。
+4. 检查服务器 Git 状态、分支和 origin。未提交代码不得覆盖；先 fetch tags，再按已有模式更新：main/master 使用对应分支和 `git pull --ff-only`，Tag 模式切到 Release Tag 的精确提交。
+5. 核对版本：分支模式 HEAD 必须包含 Release Tag 的提交，报告实际 SHA 及额外提交；Tag 模式必须精确匹配。额外提交带来的部署影响不明时先确认。
+6. 根据 Release Note 和项目已有方式处理 migration、env 及人工步骤，再按确认的顺序执行部署。通常是 Compose build/up；优先采用项目已有脚本。关键步骤失败立即停止，持续展示脱敏输出。
+7. 根据本版 Note、项目配置和实际运行状态检查代码、相关服务、配置、目录、health 及 migration。只报告实际适用且已核实的结果，不套固定检查清单。
+8. 输出 Deployment Result；技术操作和必要检查通过后可记为 **Deployment PASS**，但必须单独展示未勾选的 **Manual Business Verification**，等待用户验收。
 
-1. GitHub Release Note 是 Release → Deploy 唯一的部署上下文。业务仓库不保存 manifest / manifest.yaml / deployment.json / contract 文件，Release 不上传额外 asset，不使用 PyYAML、jsonschema 或 yq。
-2. Production 只部署 **Published GitHub Release**，拒绝 Draft 和不存在的 Release/Tag。
-3. 从 GitHub Tag 解析 **exact Commit SHA**；Release Note 的 `commit_sha`、服务器 Tag 和 checkout 后 HEAD 必须与之相等。禁止用 `git pull`、`checkout main` 或 moving branch 决定生产版本。
-4. Deploy 阶段 AI 只能 read / interpret / validate / plan / execute / verify。Release Note 存在缺失或歧义（例如「migration 可能需要」）时 `DEPLOYMENT BLOCKED`，不得猜测 migration 命令、env 文件、deploy path、持久目录、services 或 destructive 命令。
-5. Docker image 使用 release version，通过 `APP_VERSION` 传入 Compose；禁止 `latest`。只在 SSH 服务器的本地 Docker daemon 上构建和启动。
-6. 不输出密码或 secret value，不打印 `.env` 或 Compose 展开的配置，不启用命令跟踪。Release Note 只记录环境变量名称。构建脚本也不能输出秘密；日志遮盖不能替代这一约束。
-7. 不创建或修改 `.env`，不自动创建缺失的持久目录或卷；环境只报告变量名称的 PRESENT/MISSING 状态。
-8. 缺少依赖或配置就停止。不得自动安装系统包、修复服务器配置、修改防火墙、删除卷/旧镜像、执行 prune、或执行 Release Note 未明确声明的 migration/destructive 命令。
-9. 自动验证通过仅表示五项技术检查通过。最终状态必须为 **AWAITING MANUAL VERIFICATION**；请求用户按 Release Note 的人工验收清单执行业务路径并反馈结果，不得声称业务已经验证。
+## 共用安全边界
+
+- 不输出 Secret Value，不打印 `.env` 或含秘密的配置/日志，不保存 SSH 密码或自动生成生产 Secret。
+- 不自动覆盖服务器 `.env`。变量名称存在不代表要求的值更新已完成；需要用户处理时停止并等待确认。
+- 不强制覆盖服务器未提交代码，不自动 stash/reset/clean，不强推、移动或删除已有 Tag。
+- 不删除持久化数据或 Docker Volume，不执行 `docker system prune` 或 Release Note 未明确要求的 destructive database operation。
+- 失败报告阶段、脱敏错误和已改变的状态，并展示 Release Note 中的回滚方式。没有明确依据和授权，不自动进行高风险回滚。
+- 人工业务验收不自动标记通过；客户更新仅整理或提醒，未经明确授权不发送。
 
 ## 资源与范围
 
-- [templates/release-note.md](templates/release-note.md)：人工作业章节，以及保留的 Deployment Contract 模板。
-- `scripts/contract.py`：现有 Release Note 与 Deployment Contract 的解析/校验（标准库），供 deploy 使用。
-- `scripts/verify-deployment.sh <version> <server>`：deploy 的只读辅助工具，重跑相同的五项自动检查，不是第三个技能操作。
-- V1 不提供自动 rollback、镜像 registry 发布、Kubernetes、多服务器编排或自动修复。Release Note 中经确认的人工回滚说明不代表自动执行回滚。
+- [references/release.md](references/release.md)：比较、起草、确认与 Draft 创建流程。
+- [references/deploy.md](references/deploy.md)：SSH、代码更新、部署、查验与失败处理。
+- [templates/release-note.md](templates/release-note.md)：六类人工作业说明模板。
+
+不内置发布/部署脚本或固定部署 schema，不负责服务器初始化、SSH Key 配置、自动修复、自动高风险回滚或多服务器编排。
