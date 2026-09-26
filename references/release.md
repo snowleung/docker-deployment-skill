@@ -1,11 +1,11 @@
-# Release：分析、确认、创建 Draft
+# Release：分析并直接创建 Draft
 
 Release 由 Agent 使用 `git` / `gh` 完成，不再提供 release 脚本或自动文案生成器。Release Note 写给开发者和发布审核人员，不能仅用 commit 标题或文件列表代替代码分析。
 
 ```text
 main/master 已合并的 previous Tag → HEAD
 → 阅读代码差异 → 分析 migration / env / deployment
-→ 询问缺失信息 → 按模板起草 → 展示并获得开发者确认
+→ 补齐必要信息 → 按模板起草
 → 确定 Tag 对应提交 → gh 创建 Draft Release
 ```
 
@@ -67,9 +67,9 @@ git diff <previous-tag> HEAD -- <相关文件>
 - 人工部署步骤、停机或兼容性要求、回滚前提；代码回退是否兼容新数据库 schema。
 - 应验收的关键业务路径，以及是否包含需要通知客户的功能或操作变化。
 
-未发现证据不能直接写“无需”。不要猜生产路径、迁移命令、环境值或回滚方式；不能保证可回滚时明确说明限制。尚未解决的关键问题可以列在讨论草稿中，但必须解决后再请求最终确认、创建 GitHub Draft。
+未发现证据不能直接写“无需”。不要猜生产路径、迁移命令、环境值或回滚方式；不能保证可回滚时明确说明限制。尚未解决的关键问题可以列在讨论草稿中，但必须解决后再创建 GitHub Draft；仅为补齐必要信息提问，不增加正文或创建操作的确认步骤。
 
-## 4. 按模板生成并展示 Release Note
+## 4. 按模板生成 Release Note
 
 使用 [templates/release-note.md](../templates/release-note.md)，替换所有说明和占位内容，不保留与本项目无关的示例。
 
@@ -82,22 +82,20 @@ git diff <previous-tag> HEAD -- <相关文件>
 5. 人工验收：简短的业务验收清单，只写用户可感知的行为与预期结果；不写单元测试、接口测试、CI、lint、health check 或容器状态。
 6. 客户更新：明确是否有需要通知客户的内容，必要时摘要变化和客户需执行的操作；不自动发送。
 
-展示**完整 Release Note**，同时说明仓库、previous Tag、目标版本和 exact Commit SHA，取得开发者明确确认。确认范围包含该版本的 Tag 创建/推送及 Draft 创建；此前明确要求执行这些动作的授权仍然有效，但新生成的 Note 内容仍需展示并确认。仅要求“分析/起草”不代表允许写入 GitHub。
+用户请求执行 release 时，直接创建 GitHub Draft，无需再次确认 Release Note、Tag 创建/推送或 Draft 创建。正文、仓库、previous Tag、目标版本和 exact Commit SHA 应准备完整，创建后提供 Draft 供人工审核。仅要求“分析/起草正文”时，只返回正文，不写入 GitHub。
 
-用户要求改内容后，展示最终版本再确认。不要把没有回复视为同意。
+## 5. 直接使用 gh 创建 Draft
 
-## 5. 确认后使用 gh 创建 Draft
-
-将确认过的正文保存到仓库外的临时 Markdown 文件，供 `--notes-file` 使用；这不是业务仓库配置，也不作为额外 Release asset 上传。不创建分支。
+将生成的正文保存到仓库外的临时 Markdown 文件，供 `--notes-file` 使用；这不是业务仓库配置，也不作为额外 Release asset 上传。不创建分支。
 
 在写入远端前再次核对：
 
-- 工作区干净，HEAD 仍等于开发者确认的 SHA；若有变化，重新比较和确认。
-- origin/GitHub 仓库未改变；获取远端 Tags 后，目标 Tag 不存在，或确实指向已确认 SHA。
+- 工作区干净，HEAD 仍等于本次分析记录的 SHA；若有变化，重新比较、更新正文并核实范围。
+- origin/GitHub 仓库未改变；获取远端 Tags 后，目标 Tag 不存在，或确实指向已核实 SHA。
 - 目标 Release 未存在。已有 Draft/Published Release 时停止并报告，不覆盖、不追加重复内容；更新已有 Draft 需要开发者明确要求。
-- 正文仍是确认过的版本，不包含秘密值或未解决的占位信息。
+- 正文与最终分析范围一致，不包含秘密值或未解决的占位信息。
 
-若目标 Tag 尚不存在，创建 annotated Tag 并仅推送该 Tag（示例中的变量需先设置为已确认值）：
+若目标 Tag 尚不存在，创建 annotated Tag 并仅推送该 Tag（示例中的变量需先设置为已核实值）：
 
 ```bash
 git tag -a "$VERSION" "$COMMIT_SHA" -m "Release $VERSION"
@@ -106,7 +104,7 @@ git push origin "refs/tags/$VERSION"
 
 若 Tag 已存在，先用 `git rev-parse "refs/tags/$VERSION^{commit}"` 核对 exact SHA；远端也必须存在且指向同一提交。禁止强推、移动或删除已有 Tag，不让 GitHub 自动从 moving branch 创建 Tag。
 
-用经过人工确认的正文创建 Draft：
+用生成的完整正文创建 Draft：
 
 ```bash
 gh release create "$VERSION" \
@@ -117,7 +115,7 @@ gh release create "$VERSION" \
   --notes-file "$NOTES_FILE"
 ```
 
-不使用 `--generate-notes` 替换确认过的正文。失败立即停止，说明 Tag 是否已创建/推送及 Draft 是否已存在；不自动清理、重试写入或回滚。
+不使用 `--generate-notes` 替换分析后生成的正文。失败立即停止，说明 Tag 是否已创建/推送及 Draft 是否已存在；不自动清理、重试写入或回滚。
 
 成功后用 `gh release view "$VERSION" --repo "$REPO" --json tagName,isDraft,url` 检查状态，向开发者返回 Draft 链接、Tag、Commit 和 **AWAITING RELEASE REVIEW**。不自动 Publish。
 

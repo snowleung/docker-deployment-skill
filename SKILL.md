@@ -16,8 +16,8 @@ description: Use when the user asks to prepare a GitHub release from main or mas
 3. 分析部署内容、数据库 migration、服务器 `.env` 变化、人工部署步骤及回滚约束。
 4. 信息不足就询问开发者，不猜测命令、生产配置或“无需变更”。
 5. 按 [templates/release-note.md](templates/release-note.md) 生成完整 Release Note，包含业务人工验收清单及客户更新需求。
-6. 展示正文、比较范围、目标版本和 SHA，取得开发者确认。
-7. 再次核对 HEAD、工作区和 Tag，必要时为确认的 SHA 创建并推送 annotated Tag；使用 `gh release create --draft --verify-tag --notes-file` 创建 Draft。
+6. 将正文、比较范围、目标版本和 SHA 准备完整，直接进入 Draft 创建，不询问正文或创建操作的确认。
+7. 再次核对 HEAD、工作区和 Tag，必要时为已核实的 SHA 创建并推送 annotated Tag；使用 `gh release create --draft --verify-tag --notes-file` 创建 Draft。
 8. 返回 Draft 链接及 **AWAITING RELEASE REVIEW**。不自动 Publish，不新建其他分支。
 
 Release Note 必须回答：部署什么、是否需要 migration、是否修改服务器 `.env`、人工部署和回滚如何进行、哪些业务需要人工验收、是否有需要通知客户的更新。业务验收不包含技术测试；客户通知仅整理内容，不自动发送。
@@ -48,7 +48,7 @@ Release Note 必须回答：部署什么、是否需要 migration、是否修改
 
 ## 资源与范围
 
-- [references/release.md](references/release.md)：比较、起草、确认与 Draft 创建流程。
+- [references/release.md](references/release.md)：比较、起草与直接创建 Draft 的流程。
 - [references/deploy.md](references/deploy.md)：SSH、代码更新、部署、查验与失败处理。
 - [templates/release-note.md](templates/release-note.md)：六类人工作业说明模板。
 

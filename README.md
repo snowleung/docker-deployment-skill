@@ -6,7 +6,7 @@
 main/master 已合并的 previous Tag → HEAD
 → 阅读代码变化 → 分析 migration / env / deployment
 → 询问缺失信息 → 按模板起草 Release Note
-→ 开发者确认 → 确认 Tag/Commit → gh 创建 Draft Release
+→ 核对 Tag/Commit → 直接用 gh 创建 Draft Release，无需确认
 → 人工 Publish → SSH → 按现有模式更新代码 → 项目部署
 → 针对 Release 查验 → 人工业务验收
 ```
@@ -47,15 +47,15 @@ Skill 入口是仓库根目录的 SKILL.md，名称为 docker-deployment。
 
 例如向 Agent 提出：
 
-> 为当前 main 的 HEAD 准备 v0.2.0 Release。查找已合并的上一 Tag，阅读代码差异，整理部署影响；信息不足先问我。展示完整 Release Note，确认后创建 GitHub Draft。
+> 为当前 main 的 HEAD 准备 v0.2.0 Release。查找已合并的上一 Tag，阅读代码差异，整理部署影响；信息不足先问我。生成完整 Release Note 后直接创建 GitHub Draft，无需询问确认。
 
 Agent 按 [release 指引](references/release.md) 操作：
 
 1. 用 git/gh 查看仓库、主分支已合并的 Tags 和已有 Release，确定 previous Tag、目标版本和 exact HEAD SHA。
 2. 比较 previous Tag → HEAD，阅读相关代码、数据库变化、环境配置和部署文件。
 3. 不足的信息询问开发者，不猜测 migration、服务器 `.env`、人工操作或回滚方法。
-4. 按 [Release Note 模板](templates/release-note.md) 起草并展示完整内容、版本和 SHA。
-5. 开发者确认后，再检查工作区、HEAD 与 Tag；必要时创建并推送 annotated Tag，然后直接用 gh 创建 Draft。
+4. 按 [Release Note 模板](templates/release-note.md) 生成完整内容，并记录版本和 SHA。
+5. 无需询问确认，检查工作区、HEAD 与 Tag；必要时创建并推送 annotated Tag，然后直接用 gh 创建 Draft。
 
 Release Note 必须包含：
 
@@ -68,7 +68,7 @@ Release Note 必须包含：
 | 人工验收 | 只写业务操作及预期结果，不包含技术测试 |
 | 客户更新 | 明确是否需要通知客户以及通知内容，不自动发送 |
 
-确认后由 Agent 使用如下命令创建 Draft（变量来自已确认的版本、仓库和正文）：
+Agent 直接使用如下命令创建 Draft（变量来自已核实的版本、仓库和生成的正文）：
 
 ```bash
 gh release create "$VERSION" \
