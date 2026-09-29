@@ -1,6 +1,6 @@
 # Release <version>
 
-比较范围：<previous tag → target tag；首次发布则注明首次发布>
+比较范围：<previous_tag..target_sha；首次发布则注明首次发布>
 Commit：<完整 SHA>
 
 <!-- 使用前替换所有占位说明。结论必须来自代码分析或开发者确认；不要默认“无需”。 -->

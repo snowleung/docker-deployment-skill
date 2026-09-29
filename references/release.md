@@ -3,10 +3,10 @@
 Release 由 Agent 使用 `git` / `gh` 完成，不再提供 release 脚本或自动文案生成器。Release Note 写给开发者和发布审核人员，不能仅用 commit 标题或文件列表代替代码分析。
 
 ```text
-main/master 已合并的 previous Tag → HEAD
+最新 Published Release 的 previous Tag → origin/main 或 origin/master 的 exact SHA
 → 阅读代码差异 → 分析 migration / env / deployment
 → 补齐必要信息 → 按模板起草
-→ 确定 Tag 对应提交 → gh 创建 Draft Release
+→ 固定 target SHA → gh 创建候选 Draft（不创建正式 Tag）
 ```
 
 只使用当前仓库和现有 main/master，不新建其他分支。不自动 commit、不自动 Publish、不部署、不执行 migration，也不发送客户通知。
@@ -15,37 +15,22 @@ main/master 已合并的 previous Tag → HEAD
 
 检查 Git、GitHub CLI 和认证，确认 origin 对应的 GitHub 仓库。所有 `gh` 调用显式指定同一个 `--repo`，不要依赖可能指向其他项目的 `GH_REPO` 或 CLI 默认仓库。
 
-只读检查示例（`OWNER/REPO` 要替换为已核实的实际仓库）：
+标准入口为“准备发布 vX.Y.Z”。用户提供版本则直接使用，未提供则询问，不自行推断版本号。
+
+1. 检查工作区、当前分支和 origin，执行 `git fetch origin --tags`。根据项目约定及远端默认分支确定 main/master；无法确定时询问。确认 fetch 已更新所选远端跟踪分支（窄 refspec 时显式 fetch 该分支）。记录 `TARGET_SHA=$(git rev-parse "refs/remotes/origin/$RELEASE_BRANCH^{commit}")`；即使当前在 feature 分支，也不用本地 HEAD，不切换或合并分支。
+2. 分页读取 GitHub Releases，排除 Draft、prerelease 和未 Published 的条目，按 `published_at` 选最新正式 Release 的 Tag。不使用最大版本号、最近可达 Tag 或 GitHub Latest 标记代替这一规则。读取该 Release Note 作为背景；查询失败不能视为首次发布。`gh api` 使用已核实的 `repos/$REPO/releases` 路径（不支持 `--repo`），可用 `--paginate --slurp` 汇总后筛选。
+3. 解引用 previous Tag 到 commit，并验证它是 `TARGET_SHA` 的祖先；缺失、冲突或非祖先时停止并说明，不回退选旧 Tag。记录 previous Tag、previous SHA、目标版本和完整 `TARGET_SHA`。
+4. 范围固定为 `previous_tag..target_sha`；用 `git rev-list --count "$PREVIOUS_TAG..$TARGET_SHA"` 检查，无新提交则停止，不创建空 Draft。确认没有任何正式 Release 时按首次发布分析目标 SHA 的完整代码，明确注明首次发布，不虚构 previous Tag。
+
+## 2. 比较 previous Tag → target SHA，并阅读相关代码
+
+先看范围，再读具体变更及相关调用方；文件内容也从目标提交读取（如 `git show "$TARGET_SHA:path/to/file"`），避免混入当前 feature 分支或未提交改动：
 
 ```bash
-git status --short --branch
-git remote -v
-git branch --show-current
-git rev-parse HEAD
-gh auth status
-git fetch origin --tags
-git tag --merged HEAD
-git log --oneline --decorate --graph -30
-gh release list --repo OWNER/REPO --limit 100
-```
-
-- 当前 HEAD 应位于现有 main 或 master。若不是，先说明实际分支并询问开发者应分析的提交；不要自行新建、切换或合并分支。
-- 查看本地 main/master 与 origin 对应分支的关系。落后、分叉或包含尚未合并的提交时，明确指出并确认范围，不能用远端分支替换用户要求的 HEAD。
-- 以已合并到当前主分支、且是 HEAD 祖先的 Tag 为候选；结合 Git 提交图和 `gh release view <tag> --repo OWNER/REPO` 了解上一版发布背景。超过一页则继续查找，不把未出现在列表首页误判为不存在。
-- 默认使用最近可达的上一发布 Tag。不要直接取全仓库最大版本号、最新创建的 Release 或未合并分支上的 Tag。存在多个无法确定的候选时，询问开发者。
-- 排除本次目标 Tag。可用 `git describe --tags --abbrev=0 --exclude='<目标版本>' HEAD` 辅助查找，但仍需确认该 Tag 的用途。
-- 首次发布没有 previous Tag 时，明确说明这是首次发布，阅读当前版本涉及的应用和部署文件，不虚构历史差异。
-- 记录目标版本、previous Tag、previous Commit SHA、当前完整 HEAD SHA。已有目标 Tag 必须解引用到同一个 SHA；不一致则停止，不覆盖或移动 Tag。
-
-## 2. 比较 previous Tag → HEAD，并阅读相关代码
-
-先看范围，再读具体变更及相关调用方：
-
-```bash
-git log --oneline <previous-tag>..HEAD
-git diff --stat <previous-tag> HEAD
-git diff --name-status <previous-tag> HEAD
-git diff <previous-tag> HEAD -- <相关文件>
+git log --oneline "$PREVIOUS_TAG..$TARGET_SHA"
+git diff --stat "$PREVIOUS_TAG" "$TARGET_SHA"
+git diff --name-status "$PREVIOUS_TAG" "$TARGET_SHA"
+git diff "$PREVIOUS_TAG" "$TARGET_SHA" -- <相关文件>
 ```
 
 重点阅读：
@@ -82,7 +67,7 @@ git diff <previous-tag> HEAD -- <相关文件>
 5. 人工验收：简短的业务验收清单，只写用户可感知的行为与预期结果；不写单元测试、接口测试、CI、lint、health check 或容器状态。
 6. 客户更新：明确是否有需要通知客户的内容，必要时摘要变化和客户需执行的操作；不自动发送。
 
-用户请求执行 release 时，直接创建 GitHub Draft，无需再次确认 Release Note、Tag 创建/推送或 Draft 创建。正文、仓库、previous Tag、目标版本和 exact Commit SHA 应准备完整，创建后提供 Draft 供人工审核。仅要求“分析/起草正文”时，只返回正文，不写入 GitHub。
+用户请求执行 release 时，直接创建 GitHub Draft，无需再次确认 Release Note 或 Draft 创建。正文、仓库、previous Tag、目标版本和 exact Commit SHA 应准备完整，创建后提供 Draft 供人工审核。仅要求“分析/起草正文”时，只返回正文，不写入 GitHub。
 
 ## 5. 直接使用 gh 创建 Draft
 
@@ -90,19 +75,12 @@ git diff <previous-tag> HEAD -- <相关文件>
 
 在写入远端前再次核对：
 
-- 工作区干净，HEAD 仍等于本次分析记录的 SHA；若有变化，重新比较、更新正文并核实范围。
+- 工作区干净；再次 fetch 后，`origin/main` 或 `origin/master` 仍等于记录的 `TARGET_SHA`，最新正式 Release 也未改变；若有变化，重新分析并更新正文，不静默改用新提交。
 - origin/GitHub 仓库未改变；获取远端 Tags 后，目标 Tag 不存在，或确实指向已核实 SHA。
 - 目标 Release 未存在。已有 Draft/Published Release 时停止并报告，不覆盖、不追加重复内容；更新已有 Draft 需要开发者明确要求。
 - 正文与最终分析范围一致，不包含秘密值或未解决的占位信息。
 
-若目标 Tag 尚不存在，创建 annotated Tag 并仅推送该 Tag（示例中的变量需先设置为已核实值）：
-
-```bash
-git tag -a "$VERSION" "$COMMIT_SHA" -m "Release $VERSION"
-git push origin "refs/tags/$VERSION"
-```
-
-若 Tag 已存在，先用 `git rev-parse "refs/tags/$VERSION^{commit}"` 核对 exact SHA；远端也必须存在且指向同一提交。禁止强推、移动或删除已有 Tag，不让 GitHub 自动从 moving branch 创建 Tag。
+Draft 阶段不创建、推送、移动或删除正式 Tag。目标 Tag 不存在时直接创建 Draft；若本地或远端已存在，分别解引用并核对其 commit 等于 `TARGET_SHA`，不一致则停止，不能靠 `--target` 覆盖已有 Tag。
 
 用生成的完整正文创建 Draft：
 
@@ -110,14 +88,16 @@ git push origin "refs/tags/$VERSION"
 gh release create "$VERSION" \
   --repo "$REPO" \
   --draft \
-  --verify-tag \
+  --target "$TARGET_SHA" \
   --title "$VERSION" \
   --notes-file "$NOTES_FILE"
 ```
 
-不使用 `--generate-notes` 替换分析后生成的正文。失败立即停止，说明 Tag 是否已创建/推送及 Draft 是否已存在；不自动清理、重试写入或回滚。
+`--draft` 支持尚不存在的 Tag；`--target` 必须传完整 SHA，作为候选提交。不要使用要求远端 Tag 已存在的 `--verify-tag`。正式 Tag 在后续人工 Publish 时才会为缺失的 Tag 创建；已有 Tag 时 GitHub 忽略 target，因此仍须核对 Tag。Draft 不锁定未来 Tag，人工发布前应再次核对 Tag/候选 SHA 一致。
 
-成功后用 `gh release view "$VERSION" --repo "$REPO" --json tagName,isDraft,url` 检查状态，向开发者返回 Draft 链接、Tag、Commit 和 **AWAITING RELEASE REVIEW**。不自动 Publish。
+不使用 `--generate-notes` 替换分析正文，也不用 `--fail-on-no-commits` 代替上述明确范围检查。失败立即停止，查询并报告 Draft/Tag 实际状态，不自动清理、重试写入或回滚。
+
+成功后用 `gh release view "$VERSION" --repo "$REPO" --json tagName,isDraft,url` 确认 `isDraft=true` 及版本匹配；通过 Releases API 核对 `target_commitish` 与候选 SHA，并检查远端 Tag 仍不存在或与创建前一致。向开发者返回 Draft 链接、候选版本、比较范围、Commit 和 **AWAITING RELEASE REVIEW**。不自动 Publish。
 
 ## 与 Deploy 的衔接
 
