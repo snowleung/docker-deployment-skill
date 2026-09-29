@@ -26,16 +26,14 @@ Release Note 必须回答：部署什么、是否需要 migration、是否修改
 
 ## Deploy
 
-先读取 [references/deploy.md](references/deploy.md)。用户指定版本和服务器，例如“部署 v1.3.0 到 production”。由 Agent 使用 gh、SSH 和项目已有命令执行，不调用技能自带部署脚本：
+先读取 [references/deploy.md](references/deploy.md)。标准入口：“部署 v1.4.0 到 production”。Release 负责判断和说明；Deploy 只读取并执行已经审核且 Published 的正式 GitHub Release，由 Agent 使用 gh、SSH 和项目已有命令完成：
 
-1. 本地用 gh 获取指定 Published Release、Tag 和完整 Release Note；不存在、未发布或 Draft 就停止。
-2. 阅读部署内容、migration、服务器 `.env` 变化、人工步骤、回滚、业务验收和客户更新需求。结合项目文档确认代码目录与部署模式，信息不足先询问。
-3. 用已有 SSH Key/agent/config 免密连接；未配置好就停止，不保存或传递服务器密码。
-4. 检查服务器 Git 状态、分支和 origin。未提交代码不得覆盖；先 fetch tags，再按已有模式更新：main/master 使用对应分支和 `git pull --ff-only`，Tag 模式切到 Release Tag 的精确提交。
-5. 核对版本：分支模式 HEAD 必须包含 Release Tag 的提交，报告实际 SHA 及额外提交；Tag 模式必须精确匹配。额外提交带来的部署影响不明时先确认。
-6. 根据 Release Note 和项目已有方式处理 migration、env 及人工步骤，再按确认的顺序执行部署。通常是 Compose build/up；优先采用项目已有脚本。关键步骤失败立即停止，持续展示脱敏输出。
-7. 根据本版 Note、项目配置和实际运行状态检查代码、相关服务、配置、目录、health 及 migration。只报告实际适用且已核实的结果，不套固定检查清单。
-8. 输出 Deployment Result；技术操作和必要检查通过后可记为 **Deployment PASS**，但必须单独展示未勾选的 **Manual Business Verification**，等待用户验收。
+1. **Resolve Release**：本地从 GitHub 读取指定 Release、正式 Tag、exact commit SHA 和完整 Release Note，记录链接；不存在、Draft、prerelease、未 Published 或 Tag 无法解析时停止。
+2. **Preflight**：以 Note 为部署要求依据，只查项目文档/已有脚本确定如何执行，不重新阅读代码判断 migration、env、部署影响或业务验收。用已有 SSH Key/agent/config 连接，核对目录、origin、工作区、当前 SHA、依赖和执行顺序；信息不足或未提交代码阻塞时停止。
+3. **Backup**：修改服务器代码或部署前，必须成功执行项目已有标准备份；失败立即停止。没有已有机制时明确报告并停止，等待安全处置确认，不自行发明备份命令。
+4. **Deploy Release Tag**：服务器执行 `git fetch origin --tags` 或等价安全方式，从 GitHub 获取目标代码与 Tag；核对 Tag commit 等于记录的 GitHub SHA，再 detached checkout 精确提交，并验证 `server HEAD == Release Tag SHA`。任何不一致立即停止；不以 main/master 或 git pull 作为部署目标。
+5. **Apply Release Instructions**：依照 Note 的前提和顺序，采用项目已有 deploy/Compose 方式部署；明确要求 migration 时按已有标准方式执行。按 Note 检查 `.env` 要求，不猜值、不打印 Secret、不自动覆盖，需要人工处理时停止等待。所有前提必须在依赖操作之前满足，关键失败立即停止，展示脱敏进度。
+6. **Verify**：核对实际 Tag/SHA、相关 Docker 服务、health、migration 和 Note 明确要求的技术状态；全部适用技术操作与检查成功才输出 **Deployment PASS**。单独展示 Note 中未勾选的 **Manual Business Verification**，不自动标记通过。
 
 ## 共用安全边界
 
