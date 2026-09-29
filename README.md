@@ -7,7 +7,8 @@
 → 阅读代码变化 → 分析 migration / env / deployment
 → 询问缺失信息 → 按模板起草 Release Note
 → 核对候选 SHA → 直接用 gh 创建 Draft Release（不创建正式 Tag）
-→ 人工 Publish → SSH → 按现有模式更新代码 → 项目部署
+→ 人工 Publish → Resolve Release → Preflight → Backup
+→ Deploy Release Tag → Apply Release Instructions → Verify
 → 针对 Release 查验 → 人工业务验收
 ```
 
@@ -85,17 +86,16 @@ gh release create "$VERSION" \
 
 例如向 Agent 提出：
 
-> 部署 v1.3.0 到 production。
+> 部署 v1.4.0 到 production。
 
-Agent 按 [deploy 指引](references/deploy.md) 操作：
+Agent 按 [deploy 指引](references/deploy.md) 执行六步流程。Release 负责判断和说明；Deploy 只执行已审核且 Published 的正式 Release Note：
 
-1. 本地通过 gh 读取 Release、Tag 和完整 Note，确认已 Published、不是 Draft。
-2. 从 Note、项目文档确认部署目录、migration、env 变化、人工步骤与回滚；信息不足就询问。
-3. 用现有 SSH Key 免密连接；未配置好则停止，不保存或传递密码。
-4. 检查服务器 Git 状态、分支和 origin，有未提交代码就停止。
-5. fetch tags 后，按照项目已有 main/master 或 Tag 模式更新代码。
-6. 按 Release Note 和项目已有方式处理配置、migration 和人工步骤，执行部署并持续展示脱敏日志。
-7. 根据本次变更查验运行结果，输出 Deployment Result，单独列出未勾选的人工业务验收清单。
+1. **Resolve Release**：本地从 GitHub 读取指定 Release、正式 Tag、exact commit SHA 和完整 Release Note，记录链接；不存在、Draft、prerelease、未 Published 或 Tag 无法解析时停止。
+2. **Preflight**：以 Note 为部署要求依据，只查项目文档/已有脚本确定如何执行，不重新阅读代码判断 migration、env、部署影响或业务验收。用已有 SSH Key/agent/config 连接，核对目录、origin、工作区、当前 SHA、依赖和执行顺序；信息不足或未提交代码阻塞时停止。
+3. **Backup**：修改服务器代码或部署前，必须成功执行项目已有标准备份；失败立即停止。没有已有机制时明确报告并停止，等待安全处置确认，不自行发明备份命令。
+4. **Deploy Release Tag**：服务器执行 `git fetch origin --tags` 或等价安全方式，从 GitHub 获取目标代码与 Tag；核对 Tag commit 等于记录的 GitHub SHA，再 detached checkout 精确提交，并验证 `server HEAD == Release Tag SHA`。任何不一致立即停止；不以 main/master 或 git pull 作为部署目标。
+5. **Apply Release Instructions**：依照 Note 的前提和顺序，采用项目已有 deploy/Compose 方式部署；明确要求 migration 时按已有标准方式执行。按 Note 检查 `.env` 要求，不猜值、不打印 Secret、不自动覆盖，需要人工处理时停止等待。所有前提必须在依赖操作之前满足，关键失败立即停止，展示脱敏进度。
+6. **Verify**：核对实际 Tag/SHA、相关 Docker 服务、health、migration 和 Note 明确要求的技术状态；全部适用技术操作与检查成功才输出 **Deployment PASS**。单独展示 Note 中未勾选的 **Manual Business Verification**，不自动标记通过。
 
 例如 SSH config：
 
@@ -108,18 +108,13 @@ Host production
 
 Skill 使用 BatchMode 检查免密访问，保留严格主机密钥验证；未知主机或认证失败交给用户处理，不改用密码登录。
 
-## 代码更新模式
+## 精确 Release Tag 部署
 
-| 项目已有模式 | 更新方式 | 版本检查 |
-| --- | --- | --- |
-| main/master | checkout 对应分支，`git pull --ff-only origin <branch>` | 当前 HEAD 必须包含 Release Tag；报告实际 SHA 和额外提交 |
-| Tag | detached checkout Release Tag 对应提交 | 当前 HEAD 与已核实的 Tag commit 完全一致 |
-
-两种模式都先 `git fetch origin --tags` 并核对 Tag。禁止强制覆盖未提交代码或修改已有 Tag。分支模式可能包含比 Release 更新的提交；存在未说明的部署影响时先确认，不能把它描述为精确运行该 Tag。
+唯一代码目标是指定正式 Published Release 的 Tag commit。服务器仍通过 `git fetch origin --tags` 从 GitHub 获取目标代码和 Tag；核对 GitHub exact SHA 后执行 detached checkout。服务器 Tag commit 和实际 HEAD 必须都等于记录的 GitHub SHA；任何不一致立即停止。不采用 main/master 分支部署模式，不以 `git pull` 更新生产目标。
 
 ## 按本次 Release 部署和查验
 
-Compose 项目通常执行 `docker compose build` 和 `docker compose up -d`；有项目现有部署脚本时优先遵循。Migration 按项目和 Note 确定的方式与顺序执行，不套统一时机；需要迁移但方法不明确就询问。
+优先采用项目已有 deploy/Compose 方式，不为所有项目硬编码统一 build/up 命令。Migration 按 Note 要求和项目已有标准方式、顺序执行，不套统一时机；需要迁移但方法不明确就询问。
 
 `.env` 只检查变量名称和配置状态，不显示值、不生成 Secret、不自动覆盖文件。变量已存在也不代表本次要求的值更新已完成，需要用户处理的配置必须确认完成后继续。
 
@@ -129,7 +124,7 @@ Compose 项目通常执行 `docker compose build` 和 `docker compose up -d`；�
 
 ```text
 Deployment Result
-Release: v1.3.0
+Release: v1.4.0
 Server: production
 Release Tag Commit: <tag-sha>
 Current Commit: <actual-head-sha>
