@@ -3,10 +3,10 @@
 支持 `release` 和 `deploy`，均由 Skill 引导 Agent 使用 Git、GitHub CLI、SSH 和项目已有命令完成，不内置发布或部署脚本。
 
 ```text
-main/master 已合并的 previous Tag → HEAD
+最新 Published Release 的 previous Tag → origin/main 或 origin/master 的 exact SHA
 → 阅读代码变化 → 分析 migration / env / deployment
 → 询问缺失信息 → 按模板起草 Release Note
-→ 核对 Tag/Commit → 直接用 gh 创建 Draft Release，无需确认
+→ 核对候选 SHA → 直接用 gh 创建 Draft Release（不创建正式 Tag）
 → 人工 Publish → SSH → 按现有模式更新代码 → 项目部署
 → 针对 Release 查验 → 人工业务验收
 ```
@@ -47,15 +47,15 @@ Skill 入口是仓库根目录的 SKILL.md，名称为 docker-deployment。
 
 例如向 Agent 提出：
 
-> 为当前 main 的 HEAD 准备 v0.2.0 Release。查找已合并的上一 Tag，阅读代码差异，整理部署影响；信息不足先问我。生成完整 Release Note 后直接创建 GitHub Draft，无需询问确认。
+> 准备发布 v0.2.0
 
 Agent 按 [release 指引](references/release.md) 操作：
 
-1. 用 git/gh 查看仓库、主分支已合并的 Tags 和已有 Release，确定 previous Tag、目标版本和 exact HEAD SHA。
-2. 比较 previous Tag → HEAD，阅读相关代码、数据库变化、环境配置和部署文件。
+1. fetch origin 和 tags，以最新 Published Release（排除 Draft/prerelease）的 Tag 为起点，以远端 main/master 当前 exact SHA 为终点；版本未提供则询问。
+2. 检查 `previous_tag..target_sha`，无新提交则停止；有变更时阅读该范围代码、数据库变化、环境配置和部署文件。
 3. 不足的信息询问开发者，不猜测 migration、服务器 `.env`、人工操作或回滚方法。
 4. 按 [Release Note 模板](templates/release-note.md) 生成完整内容，并记录版本和 SHA。
-5. 无需询问确认，检查工作区、HEAD 与 Tag；必要时创建并推送 annotated Tag，然后直接用 gh 创建 Draft。
+5. 核对工作区、远端发布分支与 Tag，直接创建候选 Draft；不创建、推送或移动正式 Tag。
 
 Release Note 必须包含：
 
@@ -74,7 +74,7 @@ Agent 直接使用如下命令创建 Draft（变量来自已核实的版本、�
 gh release create "$VERSION" \
   --repo "$REPO" \
   --draft \
-  --verify-tag \
+  --target "$TARGET_SHA" \
   --title "$VERSION" \
   --notes-file "$NOTES_FILE"
 ```

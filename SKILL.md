@@ -9,15 +9,15 @@ description: Use when the user asks to prepare a GitHub release from main or mas
 
 ## Release
 
-先读取 [references/release.md](references/release.md)。由 Agent 直接使用 `git` / `gh`，不调用 release 专用脚本：
+标准入口：**准备发布 vX.Y.Z**；未提供版本时询问用户。先读取 [references/release.md](references/release.md)。由 Agent 直接使用 `git` / `gh`，不调用 release 专用脚本：
 
-1. 查看 main/master 已合并的 Tags 和 GitHub Release，确认 previous Tag、目标版本和当前 HEAD 的 exact Commit SHA。
-2. 比较 previous Tag → HEAD，阅读相关代码，不仅看 commit 标题或文件列表。
+1. `git fetch origin --tags`，确定发布分支 main/master；以上一个最新 Published Release（排除 Draft/prerelease）的 Tag 为起点，以 `origin/main` 或 `origin/master` 当前 HEAD 的 exact SHA 为终点。
+2. 核验 `previous_tag..target_sha`；没有新提交则停止，不创建空 Draft。有变更时阅读该范围真实代码，不仅看 commit 标题或文件列表。
 3. 分析部署内容、数据库 migration、服务器 `.env` 变化、人工部署步骤及回滚约束。
 4. 信息不足就询问开发者，不猜测命令、生产配置或“无需变更”。
 5. 按 [templates/release-note.md](templates/release-note.md) 生成完整 Release Note，包含业务人工验收清单及客户更新需求。
 6. 将正文、比较范围、目标版本和 SHA 准备完整，直接进入 Draft 创建，不询问正文或创建操作的确认。
-7. 再次核对 HEAD、工作区和 Tag，必要时为已核实的 SHA 创建并推送 annotated Tag；使用 `gh release create --draft --verify-tag --notes-file` 创建 Draft。
+7. 再次核对远端发布分支、工作区和 Tag；使用 `gh release create --draft --target "$TARGET_SHA" --notes-file` 创建候选 Draft，不创建、推送或移动正式 Tag。
 8. 返回 Draft 链接及 **AWAITING RELEASE REVIEW**。不自动 Publish，不新建其他分支。
 
 Release Note 必须回答：部署什么、是否需要 migration、是否修改服务器 `.env`、人工部署和回滚如何进行、哪些业务需要人工验收、是否有需要通知客户的更新。业务验收不包含技术测试；客户通知仅整理内容，不自动发送。
