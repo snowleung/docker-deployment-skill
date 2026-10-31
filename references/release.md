@@ -60,7 +60,7 @@ git diff "$PREVIOUS_TAG" "$TARGET_SHA" -- <相关文件>
 
 必须覆盖六类内容：
 
-1. 部署内容：本次交付的功能、修复及部署方式变化。
+1. 发布内容：本次交付的功能、修复及部署方式变化。
 2. Database Migration：明确需要/不需要；需要时说明内容、顺序和已确认的命令。
 3. Environment：明确服务器 `.env` 是否需要新增或更新；仅记录变量名称、用途和操作时机。
 4. 人工部署与回滚：明确是否需要人工操作；需要时列顺序、前提和回滚方式。不要默认“切回上一 Tag”就能撤销数据库或外部系统变更。
@@ -98,9 +98,3 @@ gh release create "$VERSION" \
 不使用 `--generate-notes` 替换分析正文，也不用 `--fail-on-no-commits` 代替上述明确范围检查。失败立即停止，查询并报告 Draft/Tag 实际状态，不自动清理、重试写入或回滚。
 
 成功后用 `gh release view "$VERSION" --repo "$REPO" --json tagName,isDraft,url` 确认 `isDraft=true` 及版本匹配；通过 Releases API 核对 `target_commitish` 与候选 SHA，并检查远端 Tag 仍不存在或与创建前一致。向开发者返回 Draft 链接、候选版本、比较范围、Commit 和 **AWAITING RELEASE REVIEW**。不自动 Publish。
-
-## 与 Deploy 的衔接
-
-Release Note 不要求 manifest 或机器可读 Deployment Contract。后续 Agent 按 [deploy 指引](deploy.md)，结合 Published Release Note、项目已有配置和服务器实际状态执行部署；信息不足时询问开发者，不猜测操作。
-
-Release 的人工验收清单仅包含业务，部署技术检查在 Deploy 阶段按本次变更决定。Release Note 中记录的人工回滚方法并不授权自动执行高风险回滚。
